@@ -14,7 +14,9 @@ Fonctionne sur **macOS**, **Linux** (systemd) et **Windows**.
 | Ouverture de session, réveil, déverrouillage | Vérifie que Claude Code est toujours connecté, sinon alerte |
 | Connexion qui expire dans moins de 7 jours | Alerte préventive (une fois par jour) |
 
-Sur macOS et Windows, l'alerte propose un bouton **Se reconnecter** qui ouvre un terminal avec `claude auth login`.
+Sur macOS et Windows, l'alerte propose un bouton **Se reconnecter** qui ouvre un terminal et reconnecte le bon compte.
+
+Le reset peut gérer **plusieurs comptes Claude** (par exemple perso et pro) : voir [Plusieurs comptes](#plusieurs-comptes).
 
 ## Installation en une commande
 
@@ -65,6 +67,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 -Interactive
 | `--wake` / `--no-wake` | `-NoWake` | Sortir l'ordi de veille |
 | `--message "…"` | `-Message "…"` | Message envoyé à Claude |
 | `--warn-days N` | `-WarnDays N` | Délai d'alerte avant expiration (défaut 7) |
+| `--accounts …` | `-Accounts …` | Comptes à resetter, ex. `principal,perso` (défaut : `principal`) |
 | `--interactive` | `-Interactive` | Poser les questions au lieu d'utiliser les défauts |
 | `--dry-run` | `-DryRun` | Génère les fichiers dans `.dry-run/` sans rien installer |
 
@@ -72,15 +75,34 @@ Pour changer l'heure ou les jours, relance simplement l'installation avec les no
 
 ## Utilisation
 
+L'installation ajoute la commande `claude-reset` (dans `~/.local/bin`, à côté de `claude`) :
+
 ```bash
-~/.claude-morning-reset/claude-reset.sh status   # état, date d'expiration, dernier reset
-~/.claude-morning-reset/claude-reset.sh reset    # lancer un reset maintenant
-~/.claude-morning-reset/claude-reset.sh check    # vérifier la connexion maintenant
+claude-reset status          # état de chaque compte : connecté, expiration, dernier reset
+claude-reset reset           # lancer un reset maintenant
+claude-reset check           # vérifier les connexions maintenant
+claude-reset login perso     # (re)connecter un compte
 ```
 
-Sous Windows : `powershell -File "$env:USERPROFILE\.claude-morning-reset\claude-reset.ps1" status`.
-
 Logs : `~/.claude-morning-reset/logs/claude-reset.log`.
+
+## Plusieurs comptes
+
+Ton compte actuel s'appelle `principal`. Pour en ajouter un autre :
+
+```bash
+claude-reset account add perso      # crée le compte et ouvre la connexion dans le navigateur
+claude-reset account list
+claude-reset account remove perso   # le retire du reset (sa config est gardée)
+```
+
+Ou directement à l'installation : `--accounts principal,perso`.
+
+- Chaque compte supplémentaire a son propre dossier de configuration (`~/.claude-accounts/<nom>`), grâce à la variable `CLAUDE_CONFIG_DIR` de Claude Code. Les connexions ne se mélangent pas.
+- Au reset, le message est envoyé à chaque compte, l'un après l'autre. Une panne sur un compte ne bloque pas les autres.
+- Les alertes indiquent le compte concerné, et **Se reconnecter** reconnecte celui-là.
+- Pour travailler avec un compte supplémentaire : `CLAUDE_CONFIG_DIR=~/.claude-accounts/perso claude` (ou un alias, que `account add` te propose). Ce compte a ses propres réglages, plugins et MCP.
+- Avoir un compte perso et un compte pro est normal ; multiplier les comptes pour contourner les limites d'utilisation peut enfreindre les conditions d'utilisation d'Anthropic.
 
 ## Ce qui est installé
 
@@ -107,7 +129,7 @@ Depuis le dépôt : `./uninstall.sh` ou `.\uninstall.ps1`.
 
 - **Réveil sur portable** : macOS ne sort de veille un portable que branché au secteur. Sous Windows, il faut autoriser les « minuteurs de réveil » dans les options d'alimentation, et certains PC en veille moderne les ignorent.
 - **`pmset repeat`** ne garde qu'un seul réveil récurrent : l'installation remplace celui qui existe déjà.
-- **Date d'expiration** : elle est lue dans un champ interne des identifiants de Claude Code (`refreshTokenExpiresAt`). Si Claude Code change ce format, cette vérification s'arrête simplement ; la détection de session expirée continue de marcher.
+- **Date d'expiration** : elle est lue dans un champ interne des identifiants de Claude Code (`refreshTokenExpiresAt`). Si Claude Code change ce format, cette vérification s'arrête simplement ; la détection de session expirée continue de marcher. Pour les comptes supplémentaires sur macOS, elle peut ne pas s'afficher (`-` dans `claude-reset status`).
 - **macOS** : à la première alerte, macOS peut demander l'autorisation de contrôler Terminal (bouton « Se reconnecter »).
 - **Linux** : les timers utilisateur ne tournent que si ta session est ouverte (écran verrouillé, ça va).
 - La version Windows n'a pas encore été testée sur une vraie machine Windows.

@@ -16,6 +16,7 @@ param(
     [switch]$NoWake,
     [string]$Message = 'Bonjour, reponds juste OK.',
     [int]$WarnDays = 7,
+    [string]$Accounts,
     [switch]$Interactive,
     [switch]$DryRun
 )
@@ -98,9 +99,18 @@ if (-not $PSBoundParameters.ContainsKey('NoWake')) {
     $Wake = (Read-Answer 'Sortir le PC de veille automatiquement pour le reset ? (o/n)' 'o') -match '^(o|y)'
 }
 
+# Comptes : on garde ceux deja configures, sauf si -Accounts ou une reponse les remplace.
+$AccountsFile = Join-Path $InstallDir 'accounts.conf'
+$Existing = if (Test-Path $AccountsFile) { (Get-Content $AccountsFile | Where-Object { $_ -match '\|' -and $_ -notmatch '^#' } | ForEach-Object { $_.Split('|')[0] }) -join ',' } else { '' }
+if (-not $Accounts) {
+    $Accounts = Read-Answer 'Comptes Claude a resetter, separes par des virgules (principal = ton compte actuel)' $(if ($Existing) { $Existing } else { 'principal' })
+}
+$AccountList = @($Accounts.Replace(' ', '').Split(',') | Where-Object { $_ })
+foreach ($n in $AccountList) { if ($n -notmatch '^[a-zA-Z0-9_-]+$') { Die "Nom de compte invalide : $n (lettres, chiffres, - et _)" } }
+
 if (-not $Ask) {
-    Info "Reglages : reset a $Time ($DaysLabel), reveil $(if ($Wake) { 'active' } else { 'desactive' })."
-    Info 'Pour les changer, voir les options dans le README (-Time, -Days, -NoWake, -Interactive).'
+    Info "Reglages : reset a $Time ($DaysLabel), reveil $(if ($Wake) { 'active' } else { 'desactive' }), comptes : $($AccountList -join ',')."
+    Info 'Pour les changer, voir les options dans le README (-Time, -Days, -NoWake, -Accounts, -Interactive).'
 }
 
 if ($DryRun) {
@@ -135,6 +145,27 @@ else {
     CheckExpiry    = $true
 } | ConvertTo-Json | Set-Content (Join-Path $InstallDir 'config.json') -Encoding UTF8
 Ok "Script installe dans $InstallDir"
+
+# "principal" = config par defaut (~\.claude) ; les autres ont leur propre dossier.
+$AccountsRoot = if ($DryRun) { Join-Path $Preview 'claude-accounts' } else { Join-Path $env:USERPROFILE '.claude-accounts' }
+$lines = @('# Comptes resettes : nom|dossier de config (vide = ~\.claude). Gerer avec : claude-reset account')
+foreach ($n in $AccountList) {
+    if ($n -eq 'principal') { $lines += 'principal|' }
+    else {
+        $d = Join-Path $AccountsRoot $n
+        New-Item -ItemType Directory -Force -Path $d | Out-Null
+        $lines += "$n|$d"
+    }
+}
+$lines | Set-Content (Join-Path $InstallDir 'accounts.conf') -Encoding UTF8
+Ok "Comptes : $($AccountList -join ',')"
+
+# Commande claude-reset, a cote de claude (deja dans le PATH).
+$LinkDir = if ($DryRun) { Join-Path $Preview 'bin' } else { Join-Path $env:USERPROFILE '.local\bin' }
+New-Item -ItemType Directory -Force -Path $LinkDir | Out-Null
+"@powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$(Join-Path $InstallDir 'claude-reset.ps1')`" %*" |
+    Set-Content (Join-Path $LinkDir 'claude-reset.cmd') -Encoding ASCII
+Ok 'Commande installee : claude-reset'
 
 $User = "$env:USERDOMAIN\$env:USERNAME"
 $Start = (Get-Date -Format 'yyyy-MM-dd') + "T$Time`:00"
@@ -209,8 +240,10 @@ if ($Wake) {
 
 Write-Host ''
 Ok 'Installation terminee.'
-Write-Host "   Etat        : powershell -File `"$Runner`" status"
-Write-Host "   Tester      : powershell -File `"$Runner`" reset"
+Write-Host '   Etat        : claude-reset status'
+Write-Host '   Tester      : claude-reset reset'
+Write-Host '   Comptes     : claude-reset account list | add NOM | remove NOM'
+Write-Host '   Connexion   : claude-reset login NOM'
 Write-Host "   Logs        : $InstallDir\logs\claude-reset.log"
 if ($Standalone) {
     Write-Host "   Desinstaller: irm $RawUrl/uninstall.ps1 | iex"
@@ -220,6 +253,18 @@ else {
 }
 Write-Host ''
 & $Runner status
+# Propose de connecter les comptes qui ne le sont pas encore.
+foreach ($n in $AccountList) {
+    $d = if ($n -eq 'principal') { '' } else { Join-Path $AccountsRoot $n }
+    if ($d) { $env:CLAUDE_CONFIG_DIR = $d } else { Remove-Item Env:CLAUDE_CONFIG_DIR -ErrorAction SilentlyContinue }
+    $logged = (& $ClaudeBin auth status 2>$null | Out-String) -match '"loggedIn":\s*true'
+    Remove-Item Env:CLAUDE_CONFIG_DIR -ErrorAction SilentlyContinue
+    if ($logged) { continue }
+    if ($Ask -and (Read-Answer "Le compte '$n' n'est pas connecte. Le connecter maintenant ? (o/n)" 'o') -match '^(o|y)') {
+        & $Runner login $n
+    }
+    else { Warn "Pense a connecter '$n' : claude-reset login $n" }
+}
 if ((Read-Answer 'Envoyer le message a Claude maintenant pour tester ? (o/n)' 'n') -match '^(o|y)') {
     & $Runner reset
     & $Runner status

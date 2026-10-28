@@ -28,6 +28,9 @@ WAKE=""
 MESSAGE="Bonjour, réponds juste OK."
 WARN_DAYS=7
 ALERT_REPEAT_MIN=120
+ACCOUNTS=""
+LINK_DIR="$HOME/.local/bin"
+ACCOUNTS_DIR="$HOME/.claude-accounts"
 DRY_RUN=0
 
 usage() {
@@ -39,6 +42,7 @@ Usage : ./install.sh [options]
   --wake / --no-wake  Sortir l'ordi de veille 2 min avant (demande sudo)
   --message TEXTE     Message envoyé à Claude (défaut : "Bonjour, réponds juste OK.")
   --warn-days N       Prévenir N jours avant l'expiration de la connexion (défaut : 7)
+  --accounts LISTE    Comptes à resetter (ex. principal,perso ; défaut : principal)
   --interactive       Poser les questions même via curl | bash
   --dry-run           Génère les fichiers dans ./.dry-run sans rien installer
   -h, --help          Affiche cette aide
@@ -56,6 +60,7 @@ while [ $# -gt 0 ]; do
     --no-wake) WAKE=0; shift ;;
     --message) MESSAGE="${2:-}"; shift 2 ;;
     --warn-days) WARN_DAYS="${2:-}"; shift 2 ;;
+    --accounts) ACCOUNTS="${2:-}"; shift 2 ;;
     --interactive) INTERACTIVE=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -173,14 +178,24 @@ if [ -z "$WAKE" ]; then
   if confirm "Sortir l'ordi de veille automatiquement avant le reset ? (sudo requis)" "o"; then WAKE=1; else WAKE=0; fi
 fi
 
+# Comptes : on garde ceux déjà configurés, sauf si --accounts ou une réponse les remplace.
+EXISTING_ACCOUNTS=$(cut -d'|' -f1 "$INSTALL_DIR/accounts.conf" 2>/dev/null | grep -v '^#' | paste -sd, - || true)
+if [ -z "$ACCOUNTS" ] && [ "$INTERACTIVE" = 1 ]; then
+  ACCOUNTS=$(ask "Comptes Claude à resetter, séparés par des virgules (principal = ton compte actuel)" "${EXISTING_ACCOUNTS:-principal}")
+fi
+ACCOUNTS=$(printf '%s' "${ACCOUNTS:-${EXISTING_ACCOUNTS:-principal}}" | tr -d ' ')
+for name in $(printf '%s' "$ACCOUNTS" | tr ',' ' '); do
+  [[ "$name" =~ ^[a-zA-Z0-9_-]+$ ]] || die "Nom de compte invalide : $name (lettres, chiffres, - et _)"
+done
+
 # Réveil 2 min avant le reset, sauf si ça ferait changer de jour.
 WAKE_TOTAL=$((HOUR * 60 + MINUTE - 2))
 [ $WAKE_TOTAL -ge 0 ] || WAKE_TOTAL=$((HOUR * 60 + MINUTE))
 WAKE_TIME=$(printf '%02d:%02d' $((WAKE_TOTAL / 60)) $((WAKE_TOTAL % 60)))
 
 if [ "$INTERACTIVE" = 0 ]; then
-  info "Réglages : reset à $TIME ($DAYS_LABEL), réveil $([ "$WAKE" = 1 ] && echo "à $WAKE_TIME" || echo "désactivé")."
-  info "Pour les changer : ... | bash -s -- --time 08:00 --days daily --no-wake (ou --interactive)"
+  info "Réglages : reset à $TIME ($DAYS_LABEL), réveil $([ "$WAKE" = 1 ] && echo "à $WAKE_TIME" || echo "désactivé"), comptes : $ACCOUNTS."
+  info "Pour les changer : ... | bash -s -- --time 08:00 --days daily --no-wake --accounts principal,perso (ou --interactive)"
 fi
 
 if [ "$DRY_RUN" = 1 ]; then
@@ -190,6 +205,8 @@ if [ "$DRY_RUN" = 1 ]; then
   AGENTS_DIR="$PREVIEW/LaunchAgents"
   SYSTEMD_DIR="$PREVIEW/systemd-user"
   AUTOSTART_DIR="$PREVIEW/autostart"
+  LINK_DIR="$PREVIEW/bin"
+  ACCOUNTS_DIR="$PREVIEW/claude-accounts"
   warn "Mode dry-run : fichiers générés dans $PREVIEW, rien n'est installé."
 fi
 
@@ -216,6 +233,28 @@ chmod +x "$INSTALL_DIR/claude-reset.sh"
 ok "Script installé dans $INSTALL_DIR"
 
 RUNNER="$INSTALL_DIR/claude-reset.sh"
+
+# « principal » = config par défaut (~/.claude) ; les autres ont leur propre dossier.
+{
+  echo "# Comptes resettés : nom|dossier de config (vide = ~/.claude). Gérer avec : claude-reset account"
+  for name in $(printf '%s' "$ACCOUNTS" | tr ',' ' '); do
+    if [ "$name" = principal ]; then
+      echo "principal|"
+    else
+      mkdir -p "$ACCOUNTS_DIR/$name"
+      echo "$name|$ACCOUNTS_DIR/$name"
+    fi
+  done
+} > "$INSTALL_DIR/accounts.conf"
+ok "Comptes : $ACCOUNTS"
+
+mkdir -p "$LINK_DIR"
+ln -sf "$RUNNER" "$LINK_DIR/claude-reset"
+ok "Commande installée : claude-reset"
+case ":$PATH:" in
+  *":$HOME/.local/bin:"*) ;;
+  *) [ "$DRY_RUN" = 1 ] || warn "~/.local/bin n'est pas dans ton PATH : ajoute-le pour utiliser claude-reset." ;;
+esac
 
 # ---------- macOS ----------
 
@@ -399,8 +438,10 @@ esac
 
 echo
 ok "Installation terminée."
-echo "   État        : $RUNNER status"
-echo "   Tester      : $RUNNER reset"
+echo "   État        : claude-reset status"
+echo "   Tester      : claude-reset reset"
+echo "   Comptes     : claude-reset account list | add NOM | remove NOM"
+echo "   Connexion   : claude-reset login NOM"
 echo "   Logs        : $INSTALL_DIR/logs/claude-reset.log"
 if [ "$STANDALONE" = 1 ]; then
   echo "   Désinstaller: curl -fsSL $RAW_URL/uninstall.sh | bash"
@@ -411,6 +452,17 @@ fi
 if [ "$DRY_RUN" = 0 ]; then
   echo
   "$RUNNER" status || true
+  # Propose de connecter les comptes qui ne le sont pas encore.
+  for name in $(printf '%s' "$ACCOUNTS" | tr ',' ' '); do
+    dir=$(grep "^$name|" "$INSTALL_DIR/accounts.conf" | cut -d'|' -f2)
+    if ! ( [ -n "$dir" ] && export CLAUDE_CONFIG_DIR="$dir"; "$CLAUDE_BIN" auth status 2>/dev/null | grep -Eq '"loggedIn": *true' ); then
+      if confirm "Le compte « $name » n'est pas connecté. Le connecter maintenant ?" "o" && [ "$INTERACTIVE" = 1 ]; then
+        "$RUNNER" login "$name" < /dev/tty || warn "Connexion de « $name » non terminée."
+      else
+        warn "Pense à connecter « $name » : claude-reset login $name"
+      fi
+    fi
+  done
   if confirm "Envoyer le message à Claude maintenant pour tester ?" "n"; then
     "$RUNNER" reset && ok "Test réussi." || warn "Le test a échoué, voir le log ci-dessus."
   fi

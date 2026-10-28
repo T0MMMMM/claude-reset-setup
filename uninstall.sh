@@ -47,7 +47,15 @@ case "$(uname -s)" in
   *) echo "Sous Windows, utilise uninstall.ps1." >&2; exit 1 ;;
 esac
 
+rm -f "$HOME/.local/bin/claude-reset"
+ok "Commande claude-reset supprimée."
+
 if [ -d "$INSTALL_DIR" ] && confirm "Supprimer $INSTALL_DIR (script, config et logs) ?" "o"; then
   rm -rf "$INSTALL_DIR" && ok "Dossier supprimé."
+fi
+# Les comptes supplémentaires peuvent servir en dehors du reset : on ne les supprime que sur demande.
+if [ -d "$HOME/.claude-accounts" ] &&
+  confirm "Supprimer aussi les comptes supplémentaires (~/.claude-accounts) ? Il faudra les reconnecter." "n"; then
+  rm -rf "$HOME/.claude-accounts" && ok "Comptes supplémentaires supprimés."
 fi
 ok "Désinstallation terminée."
