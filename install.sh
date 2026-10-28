@@ -1,9 +1,20 @@
 #!/usr/bin/env bash
 # Installe le reset matinal de Claude Code sur macOS ou Linux.
 # Sous Windows, utilise install.ps1.
+#
+# En une commande :
+#   curl -fsSL https://raw.githubusercontent.com/T0MMMMM/claude-reset-setup/main/install.sh | bash
 set -euo pipefail
 
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+RAW_URL="${CMR_RAW_URL:-https://raw.githubusercontent.com/T0MMMMM/claude-reset-setup/main}"
+SCRIPT_PATH="${BASH_SOURCE[0]:-}"
+REPO_DIR="$(cd "$(dirname "${SCRIPT_PATH:-.}")" && pwd)"
+# Lancé via curl | bash : pas de dépôt local, on télécharge ce qu'il faut.
+STANDALONE=0
+[ -n "$SCRIPT_PATH" ] && [ -f "$REPO_DIR/bin/claude-reset.sh" ] || STANDALONE=1
+# Questions seulement si lancé directement dans un terminal (ou avec --interactive).
+INTERACTIVE=0
+[ -t 0 ] && INTERACTIVE=1
 INSTALL_DIR="$HOME/.claude-morning-reset"
 AGENTS_DIR="$HOME/Library/LaunchAgents"
 SYSTEMD_DIR="$HOME/.config/systemd/user"
@@ -28,10 +39,12 @@ Usage : ./install.sh [options]
   --wake / --no-wake  Sortir l'ordi de veille 2 min avant (demande sudo)
   --message TEXTE     Message envoyé à Claude (défaut : "Bonjour, réponds juste OK.")
   --warn-days N       Prévenir N jours avant l'expiration de la connexion (défaut : 7)
+  --interactive       Poser les questions même via curl | bash
   --dry-run           Génère les fichiers dans ./.dry-run sans rien installer
   -h, --help          Affiche cette aide
 
-Sans option, le script pose les questions.
+Lancé dans un terminal, le script pose les questions.
+Via curl | bash, il utilise les défauts : 07:30, du lundi au vendredi, avec réveil.
 EOF
 }
 
@@ -43,6 +56,7 @@ while [ $# -gt 0 ]; do
     --no-wake) WAKE=0; shift ;;
     --message) MESSAGE="${2:-}"; shift 2 ;;
     --warn-days) WARN_DAYS="${2:-}"; shift 2 ;;
+    --interactive) INTERACTIVE=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Option inconnue : $1" >&2; usage; exit 1 ;;
@@ -57,7 +71,7 @@ die() { printf '\033[1;31m✗\033[0m %s\n' "$*" >&2; exit 1; }
 ask() {
   local answer=""
   # Sans terminal (ex. lancé par un autre programme), on prend la valeur par défaut.
-  if { exec 3< /dev/tty; } 2>/dev/null; then
+  if [ "$INTERACTIVE" = 1 ] && { exec 3< /dev/tty; } 2>/dev/null; then
     read -r -p "$1 [$2] : " answer <&3 || true
     exec 3<&-
   fi
@@ -143,7 +157,7 @@ MINUTE=$((10#${BASH_REMATCH[2]}))
 TIME=$(printf '%02d:%02d' "$HOUR" "$MINUTE")
 
 if [ -z "$DAYS" ]; then
-  echo "Récurrence : 1) du lundi au vendredi  2) tous les jours  3) week-end  4) jours au choix"
+  [ "$INTERACTIVE" = 1 ] && echo "Récurrence : 1) du lundi au vendredi  2) tous les jours  3) week-end  4) jours au choix"
   case "$(ask "Choix" "1")" in
     1) DAYS=weekdays ;;
     2) DAYS=daily ;;
@@ -164,6 +178,11 @@ WAKE_TOTAL=$((HOUR * 60 + MINUTE - 2))
 [ $WAKE_TOTAL -ge 0 ] || WAKE_TOTAL=$((HOUR * 60 + MINUTE))
 WAKE_TIME=$(printf '%02d:%02d' $((WAKE_TOTAL / 60)) $((WAKE_TOTAL % 60)))
 
+if [ "$INTERACTIVE" = 0 ]; then
+  info "Réglages : reset à $TIME ($DAYS_LABEL), réveil $([ "$WAKE" = 1 ] && echo "à $WAKE_TIME" || echo "désactivé")."
+  info "Pour les changer : ... | bash -s -- --time 08:00 --days daily --no-wake (ou --interactive)"
+fi
+
 if [ "$DRY_RUN" = 1 ]; then
   PREVIEW="$REPO_DIR/.dry-run"
   rm -rf "$PREVIEW"
@@ -177,7 +196,12 @@ fi
 # ---------- Fichiers communs ----------
 
 mkdir -p "$INSTALL_DIR/logs" "$INSTALL_DIR/state"
-cp "$REPO_DIR/bin/claude-reset.sh" "$INSTALL_DIR/claude-reset.sh"
+if [ "$STANDALONE" = 1 ]; then
+  curl -fsSL "$RAW_URL/bin/claude-reset.sh" -o "$INSTALL_DIR/claude-reset.sh" ||
+    die "Téléchargement impossible : $RAW_URL/bin/claude-reset.sh"
+else
+  cp "$REPO_DIR/bin/claude-reset.sh" "$INSTALL_DIR/claude-reset.sh"
+fi
 chmod +x "$INSTALL_DIR/claude-reset.sh"
 {
   echo "# Généré par install.sh — relance install.sh pour changer ces valeurs."
@@ -378,7 +402,11 @@ ok "Installation terminée."
 echo "   État        : $RUNNER status"
 echo "   Tester      : $RUNNER reset"
 echo "   Logs        : $INSTALL_DIR/logs/claude-reset.log"
-echo "   Désinstaller: $REPO_DIR/uninstall.sh"
+if [ "$STANDALONE" = 1 ]; then
+  echo "   Désinstaller: curl -fsSL $RAW_URL/uninstall.sh | bash"
+else
+  echo "   Désinstaller: $REPO_DIR/uninstall.sh"
+fi
 
 if [ "$DRY_RUN" = 0 ]; then
   echo

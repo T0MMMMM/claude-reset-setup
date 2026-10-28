@@ -16,27 +16,44 @@ Fonctionne sur **macOS**, **Linux** (systemd) et **Windows**.
 
 Sur macOS et Windows, l'alerte propose un bouton **Se reconnecter** qui ouvre un terminal avec `claude auth login`.
 
-## Installation
+## Installation en une commande
 
 Prérequis : [Claude Code](https://claude.com/claude-code) installé et connecté (`claude auth login`).
 
-### macOS / Linux
+**macOS / Linux**
 
 ```bash
-./install.sh
+curl -fsSL https://raw.githubusercontent.com/T0MMMMM/claude-reset-setup/main/install.sh | bash
 ```
 
-Le script détecte le système, pose les questions (heure, récurrence, réveil) et installe tout. Sans questions :
-
-```bash
-./install.sh --time 07:30 --days weekdays --wake
-```
-
-### Windows (PowerShell)
+**Windows (PowerShell)**
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\install.ps1
-powershell -ExecutionPolicy Bypass -File .\install.ps1 -Time 07:30 -Days weekdays
+irm https://raw.githubusercontent.com/T0MMMMM/claude-reset-setup/main/install.ps1 | iex
+```
+
+Réglages par défaut : reset à **07:30**, **du lundi au vendredi**, **avec réveil**. Seul le mot de passe administrateur est demandé (pour le réveil, sur macOS et Linux).
+
+Pour choisir d'autres réglages :
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/T0MMMMM/claude-reset-setup/main/install.sh | bash -s -- --time 08:00 --days lun,mer,ven
+curl -fsSL https://raw.githubusercontent.com/T0MMMMM/claude-reset-setup/main/install.sh | bash -s -- --interactive
+```
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/T0MMMMM/claude-reset-setup/main/install.ps1))) -Time 08:00 -Days lun,mer,ven
+```
+
+## Installation depuis le dépôt
+
+```bash
+git clone https://github.com/T0MMMMM/claude-reset-setup.git && cd claude-reset-setup
+./install.sh                     # pose les questions
+```
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -Interactive
 ```
 
 ### Options
@@ -48,9 +65,10 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 -Time 07:30 -Days weekday
 | `--wake` / `--no-wake` | `-NoWake` | Sortir l'ordi de veille |
 | `--message "…"` | `-Message "…"` | Message envoyé à Claude |
 | `--warn-days N` | `-WarnDays N` | Délai d'alerte avant expiration (défaut 7) |
+| `--interactive` | `-Interactive` | Poser les questions au lieu d'utiliser les défauts |
 | `--dry-run` | `-DryRun` | Génère les fichiers dans `.dry-run/` sans rien installer |
 
-Pour changer l'heure ou les jours, relance simplement l'installateur.
+Pour changer l'heure ou les jours, relance simplement l'installation avec les nouveaux réglages.
 
 ## Utilisation
 
@@ -76,12 +94,14 @@ Logs : `~/.claude-morning-reset/logs/claude-reset.log`.
 ## Désinstallation
 
 ```bash
-./uninstall.sh
+curl -fsSL https://raw.githubusercontent.com/T0MMMMM/claude-reset-setup/main/uninstall.sh | bash
 ```
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\uninstall.ps1
+irm https://raw.githubusercontent.com/T0MMMMM/claude-reset-setup/main/uninstall.ps1 | iex
 ```
+
+Depuis le dépôt : `./uninstall.sh` ou `.\uninstall.ps1`.
 
 ## Limites à connaître
 

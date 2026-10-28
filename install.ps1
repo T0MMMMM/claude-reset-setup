@@ -1,60 +1,74 @@
-﻿# Installe le reset matinal de Claude Code sur Windows.
+# Installe le reset matinal de Claude Code sur Windows.
 # Sur macOS ou Linux, utilise install.sh.
 #
+# En une commande (defauts : 07:30, du lundi au vendredi, avec reveil) :
+#   irm https://raw.githubusercontent.com/T0MMMMM/claude-reset-setup/main/install.ps1 | iex
+# Avec des options :
+#   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/T0MMMMM/claude-reset-setup/main/install.ps1))) -Time 08:00 -Days daily
+# Depuis le depot :
 #   powershell -ExecutionPolicy Bypass -File .\install.ps1
-#   powershell -ExecutionPolicy Bypass -File .\install.ps1 -Time 07:30 -Days weekdays
+#
+# Fichier volontairement en ASCII : il doit se lire correctement via irm | iex
+# comme depuis un fichier, quel que soit l'encodage.
 param(
     [string]$Time,
     [string]$Days,
     [switch]$NoWake,
-    [string]$Message = 'Bonjour, réponds juste OK.',
+    [string]$Message = 'Bonjour, reponds juste OK.',
     [int]$WarnDays = 7,
+    [switch]$Interactive,
     [switch]$DryRun
 )
 
 $ErrorActionPreference = 'Stop'
-$RepoDir = $PSScriptRoot
+$RawUrl = if ($env:CMR_RAW_URL) { $env:CMR_RAW_URL } else { 'https://raw.githubusercontent.com/T0MMMMM/claude-reset-setup/main' }
+# Via irm | iex il n'y a pas de depot local : on telecharge ce qu'il faut et on ne pose pas de questions.
+$Standalone = -not $PSScriptRoot -or -not (Test-Path (Join-Path $PSScriptRoot 'bin\claude-reset.ps1'))
+$RepoDir = if ($Standalone) { (Get-Location).Path } else { $PSScriptRoot }
+$Ask = $Interactive -or -not $Standalone
 $InstallDir = Join-Path $env:USERPROFILE '.claude-morning-reset'
 $TaskRun = 'ClaudeMorningReset'
 $TaskCheck = 'ClaudeMorningReset-Check'
 
-function Info($t) { Write-Host "› $t" -ForegroundColor Cyan }
-function Ok($t) { Write-Host "✓ $t" -ForegroundColor Green }
-function Warn($t) { Write-Host "! $t" -ForegroundColor Yellow }
-function Die($t) { Write-Host "✗ $t" -ForegroundColor Red; exit 1 }
+function Info($t) { Write-Host "> $t" -ForegroundColor Cyan }
+function Ok($t) { Write-Host "[ok] $t" -ForegroundColor Green }
+function Warn($t) { Write-Host "[!] $t" -ForegroundColor Yellow }
+# throw plutot que exit : exit fermerait la fenetre PowerShell lancee via iex.
+function Die($t) { Write-Host "[x] $t" -ForegroundColor Red; throw $t }
 
-function Ask([string]$Prompt, [string]$Default) {
+function Read-Answer([string]$Prompt, [string]$Default) {
+    if (-not $Ask) { return $Default }
     $a = Read-Host "$Prompt [$Default]"
     if ([string]::IsNullOrWhiteSpace($a)) { return $Default }
     return $a
 }
 
-# ---------- Système ----------
+# ---------- Systeme ----------
 
 if ($PSVersionTable.PSEdition -eq 'Core' -and -not $IsWindows) {
-    Die 'Sur macOS ou Linux, lance ./install.sh.'
+    Die 'Sur macOS ou Linux, utilise install.sh.'
 }
-Info 'Système détecté : windows'
+Info 'Systeme detecte : windows'
 
 $claude = Get-Command claude -ErrorAction SilentlyContinue
 $ClaudeBin = if ($claude) { $claude.Source } else { Join-Path $env:USERPROFILE '.local\bin\claude.exe' }
 if (-not (Test-Path $ClaudeBin)) { Die "Commande claude introuvable. Installe Claude Code d'abord : https://claude.com/claude-code" }
 Info "Claude Code : $ClaudeBin"
 
-# ---------- Questions ----------
+# ---------- Reglages ----------
 
-if (-not $Time) { $Time = Ask 'Heure du reset (HH:MM)' '07:30' }
+if (-not $Time) { $Time = Read-Answer 'Heure du reset (HH:MM)' '07:30' }
 if ($Time -notmatch '^([01]?\d|2[0-3]):([0-5]\d)$') { Die "Heure invalide : $Time" }
 $Hour = [int]$Matches[1]; $Minute = [int]$Matches[2]
 $Time = '{0:D2}:{1:D2}' -f $Hour, $Minute
 
 if (-not $Days) {
-    Write-Host 'Récurrence : 1) du lundi au vendredi  2) tous les jours  3) week-end  4) jours au choix'
-    switch (Ask 'Choix' '1') {
+    if ($Ask) { Write-Host 'Recurrence : 1) du lundi au vendredi  2) tous les jours  3) week-end  4) jours au choix' }
+    switch (Read-Answer 'Choix' '1') {
         '1' { $Days = 'weekdays' }
         '2' { $Days = 'daily' }
         '3' { $Days = 'weekend' }
-        '4' { $Days = Ask 'Jours séparés par des virgules (ex. lun,mer,ven)' 'lun,mar,mer,jeu,ven' }
+        '4' { $Days = Read-Answer 'Jours separes par des virgules (ex. lun,mer,ven)' 'lun,mar,mer,jeu,ven' }
         default { Die 'Choix invalide.' }
     }
 }
@@ -81,20 +95,36 @@ $DaysLabel = ($DayList | ForEach-Object { $DayLabels[$_ - 1] }) -join ','
 
 $Wake = -not $NoWake
 if (-not $PSBoundParameters.ContainsKey('NoWake')) {
-    $Wake = (Ask "Sortir le PC de veille automatiquement pour le reset ? (o/n)" 'o') -match '^(o|y)'
+    $Wake = (Read-Answer 'Sortir le PC de veille automatiquement pour le reset ? (o/n)' 'o') -match '^(o|y)'
+}
+
+if (-not $Ask) {
+    Info "Reglages : reset a $Time ($DaysLabel), reveil $(if ($Wake) { 'active' } else { 'desactive' })."
+    Info 'Pour les changer, voir les options dans le README (-Time, -Days, -NoWake, -Interactive).'
 }
 
 if ($DryRun) {
     $Preview = Join-Path $RepoDir '.dry-run'
     Remove-Item $Preview -Recurse -Force -ErrorAction SilentlyContinue
     $InstallDir = Join-Path $Preview 'install'
-    Warn "Mode dry-run : fichiers générés dans $Preview, rien n'est installé."
+    Warn "Mode dry-run : fichiers generes dans $Preview, rien n'est installe."
 }
 
 # ---------- Fichiers ----------
 
 New-Item -ItemType Directory -Force -Path (Join-Path $InstallDir 'logs'), (Join-Path $InstallDir 'state') | Out-Null
-Copy-Item (Join-Path $RepoDir 'bin\claude-reset.ps1') $InstallDir -Force
+$Runner = Join-Path $InstallDir 'claude-reset.ps1'
+if ($Standalone) {
+    # Telechargement en octets pour garder l'encodage d'origine (UTF-8 avec BOM).
+    $bytes = (Invoke-WebRequest "$RawUrl/bin/claude-reset.ps1" -UseBasicParsing).Content
+    if ($bytes -is [string]) {
+        $bytes = [Text.Encoding]::UTF8.GetPreamble() + [Text.Encoding]::UTF8.GetBytes($bytes.TrimStart([char]0xFEFF))
+    }
+    [IO.File]::WriteAllBytes($Runner, $bytes)
+}
+else {
+    Copy-Item (Join-Path $RepoDir 'bin\claude-reset.ps1') $Runner -Force
+}
 [ordered]@{
     ClaudeBin      = $ClaudeBin
     Message        = $Message
@@ -104,9 +134,8 @@ Copy-Item (Join-Path $RepoDir 'bin\claude-reset.ps1') $InstallDir -Force
     AlertRepeatMin = 120
     CheckExpiry    = $true
 } | ConvertTo-Json | Set-Content (Join-Path $InstallDir 'config.json') -Encoding UTF8
-Ok "Script installé dans $InstallDir"
+Ok "Script installe dans $InstallDir"
 
-$Runner = Join-Path $InstallDir 'claude-reset.ps1'
 $User = "$env:USERDOMAIN\$env:USERNAME"
 $Start = (Get-Date -Format 'yyyy-MM-dd') + "T$Time`:00"
 $DaysXml = ($DayList | ForEach-Object { "<$($DayNames[$_ - 1]) />" }) -join ''
@@ -151,7 +180,7 @@ $RunTriggers = @"
       <ScheduleByWeek><DaysOfWeek>$DaysXml</DaysOfWeek><WeeksInterval>1</WeeksInterval></ScheduleByWeek>
     </CalendarTrigger>
 "@
-# À l'ouverture de session et au déverrouillage = quand on « ouvre l'ordi ».
+# A l'ouverture de session et au deverrouillage = quand on "ouvre l'ordi".
 $CheckTriggers = @"
 <LogonTrigger><Enabled>true</Enabled><UserId>$User</UserId></LogonTrigger>
     <SessionStateChangeTrigger><Enabled>true</Enabled><StateChange>SessionUnlock</StateChange><UserId>$User</UserId></SessionStateChangeTrigger>
@@ -163,30 +192,35 @@ $CheckXml = Get-TaskXml $CheckTriggers 'check' $false
 if ($DryRun) {
     $RunXml | Set-Content (Join-Path $Preview "$TaskRun.xml")
     $CheckXml | Set-Content (Join-Path $Preview "$TaskCheck.xml")
-    Ok "Tâches écrites dans $Preview (non enregistrées)."
-    exit 0
+    Ok "Taches ecrites dans $Preview (non enregistrees)."
+    return
 }
 
 Register-ScheduledTask -TaskName $TaskRun -Xml $RunXml -Force | Out-Null
 Register-ScheduledTask -TaskName $TaskCheck -Xml $CheckXml -Force | Out-Null
-Ok "Reset programmé à $Time ($DaysLabel), vérification à l'ouverture de session et au déverrouillage."
+Ok "Reset programme a $Time ($DaysLabel), verification a l'ouverture de session et au deverrouillage."
 
 if ($Wake) {
-    Warn 'Pour que le PC sorte de veille, les « minuteurs de réveil » doivent être autorisés :'
-    Warn '  Panneau de configuration > Options d''alimentation > Modifier les paramètres du mode'
-    Warn '  > Paramètres avancés > Veille > Autoriser les minuteurs de réveil = Activé.'
+    Warn 'Pour que le PC sorte de veille, les "minuteurs de reveil" doivent etre autorises :'
+    Warn '  Panneau de configuration > Options d''alimentation > Modifier les parametres du mode'
+    Warn '  > Parametres avances > Veille > Autoriser les minuteurs de reveil = Active.'
     Warn 'Certains portables (veille moderne) ignorent ces minuteurs.'
 }
 
 Write-Host ''
-Ok 'Installation terminée.'
-Write-Host "   État        : powershell -File `"$Runner`" status"
+Ok 'Installation terminee.'
+Write-Host "   Etat        : powershell -File `"$Runner`" status"
 Write-Host "   Tester      : powershell -File `"$Runner`" reset"
 Write-Host "   Logs        : $InstallDir\logs\claude-reset.log"
-Write-Host "   Désinstaller: $RepoDir\uninstall.ps1"
+if ($Standalone) {
+    Write-Host "   Desinstaller: irm $RawUrl/uninstall.ps1 | iex"
+}
+else {
+    Write-Host "   Desinstaller: $RepoDir\uninstall.ps1"
+}
 Write-Host ''
 & $Runner status
-if ((Ask "Envoyer le message à Claude maintenant pour tester ? (o/n)" 'n') -match '^(o|y)') {
+if ((Read-Answer 'Envoyer le message a Claude maintenant pour tester ? (o/n)' 'n') -match '^(o|y)') {
     & $Runner reset
     & $Runner status
 }
