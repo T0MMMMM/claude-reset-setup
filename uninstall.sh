@@ -8,8 +8,11 @@ UNIT="claude-morning-reset"
 
 ok() { printf '\033[1;32m✓\033[0m %s\n' "$*"; }
 confirm() {
-  local answer
-  read -r -p "$1 (o/n) [$2] : " answer < /dev/tty || true
+  local answer=""
+  if { exec 3< /dev/tty; } 2>/dev/null; then
+    read -r -p "$1 (o/n) [$2] : " answer <&3 || true
+    exec 3<&-
+  fi
   case "${answer:-$2}" in o|O|y|Y|oui|yes) return 0 ;; *) return 1 ;; esac
 }
 

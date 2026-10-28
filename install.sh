@@ -55,8 +55,12 @@ warn() { printf '\033[1;33m!\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31m✗\033[0m %s\n' "$*" >&2; exit 1; }
 
 ask() {
-  local answer
-  read -r -p "$1 [$2] : " answer < /dev/tty || true
+  local answer=""
+  # Sans terminal (ex. lancé par un autre programme), on prend la valeur par défaut.
+  if { exec 3< /dev/tty; } 2>/dev/null; then
+    read -r -p "$1 [$2] : " answer <&3 || true
+    exec 3<&-
+  fi
   echo "${answer:-$2}"
 }
 
